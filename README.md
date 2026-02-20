@@ -65,6 +65,25 @@ Run the script as `root` from your Unraid terminal:
 4. **Patching:** Extracts your currently installed Nvidia driver `.txz` file, replaces the default kernel modules with the newly compiled ones, and repackages the archive.
 5. **Checksum:** Generates a new `.md5` file, ensuring the Unraid plugin manager recognizes the modified package as valid.
 
+## Verification
+
+Once your system is successfully patched and rebooted, you can verify that P2P is working using the following tools:
+
+### 1. `nvidia-smi topo`
+
+You can use the `nvidia-smi topo` command to verify the topology and P2P capabilities between your GPUs:
+
+- `nvidia-smi topo -m`: Displays the overall connection matrix. Look for `PIX` or `PXB` (direct PCIe connections) rather than `SYS` (routing through the system CPU).
+- `nvidia-smi topo -r`: Displays the P2P read accessibility matrix.
+- `nvidia-smi topo -w`: Displays the P2P write accessibility matrix.
+- `nvidia-smi topo -p2p r`: *(Optional)* Displays the P2P status and explains why P2P might be unsupported.
+
+If P2P memory access is successfully enabled, the read (`-r`) and write (`-w`) matrices will indicate that the GPUs can access each other.
+
+### 2. CUDA samples (`p2pBandwidthLatencyTest`)
+
+If you have the CUDA extras and samples installed (available via many Docker images containing complete CUDA toolkits), you can run the `p2pBandwidthLatencyTest` binary. It natively tests whether GPUs can communicate bidirectionally. If P2P access works, the tool will report `P2P Connectivity Matrix` mapping to `1` (Yes) between GPUs instead of `0` (No), and show significantly enhanced bandwidth speeds and lower latencies across PCIe.
+
 ## Acknowledgments
 
 - P2P-patched kernel modules provided by [aikitoria/open-gpu-kernel-modules](https://github.com/aikitoria/open-gpu-kernel-modules).
