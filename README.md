@@ -2,6 +2,11 @@
 
 A utility script (`patch-driver.sh`) that patches the Unraid Nvidia driver plugin with P2P-enabled `open-gpu-kernel-modules`. This re-enables peer-to-peer (P2P) memory access over PCIe on consumer GPUs like the RTX 3090, 4090 and 5090, which is necessary for certain machine learning and distributed computing workloads.
 
+
+## Warning
+
+**This script modifies your Unraid system files. Use it at your own risk.**
+
 ## Features
 
 - **Auto-Detection:** Automatically detects your installed Unraid kernel and Nvidia driver versions.
@@ -73,12 +78,21 @@ Once your system is successfully patched and rebooted, you can verify that P2P i
 
 You can use the `nvidia-smi topo` command to verify the topology and P2P capabilities between your GPUs:
 
-- `nvidia-smi topo -m`: Displays the overall connection matrix. Look for `PIX` or `PXB` (direct PCIe connections) rather than `SYS` (routing through the system CPU).
-- `nvidia-smi topo -r`: Displays the P2P read accessibility matrix.
-- `nvidia-smi topo -w`: Displays the P2P write accessibility matrix.
+- `nvidia-smi topo -m`: Displays the overall connection matrix.
+- `nvidia-smi topo -p2p a`: Displays the P2P read accessibility matrix.
+- `nvidia-smi topo -p2p w`: Displays the P2P write accessibility matrix.
 - `nvidia-smi topo -p2p r`: *(Optional)* Displays the P2P status and explains why P2P might be unsupported.
 
-If P2P memory access is successfully enabled, the read (`-r`) and write (`-w`) matrices will indicate that the GPUs can access each other.
+If P2P memory access is successfully enabled, the read (`-r`) and write (`-w`) matrices will indicate that the GPUs can access each other. Similar to below:
+
+```markdown
+| | GPU0 | GPU1 | GPU2 | GPU3 |
+| :--- | :---: | :---: | :---: | :---: |
+| **GPU0** | X | OK | OK | OK |
+| **GPU1** | OK | X | OK | OK |
+| **GPU2** | OK | OK | X | OK |
+| **GPU3** | OK | OK | OK | X |
+```
 
 ### 2. CUDA samples (`p2pBandwidthLatencyTest`)
 
