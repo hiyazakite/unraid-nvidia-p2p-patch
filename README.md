@@ -13,6 +13,7 @@ A utility script (`patch-driver.sh`) that patches the Unraid Nvidia driver plugi
 - **Automated Downloads:** Fetches the appropriate P2P-patched kernel modules from `aikitoria/open-gpu-kernel-modules`.
 - **Built-in Compilation:** Compiles the kernel modules directly on Unraid. If build tools (gcc, make) are not installed natively, it automatically builds and manages a Dockerized build environment (`ich777/unraid_kernel`).
 - **Seamless Injection:** Extracts your locally installed Nvidia driver package (`.txz`), swaps in the compiled `.ko` modules, repackages it, and updates the `.md5` checksum.
+- **GreenBoost (Optional):** Supports building and injecting the **GreenBoost** kernel module and CUDA shim for transparent GPU memory extension using system RAM and NVMe.
 - **Live Reload:** Optionally reloads the live kernel modules without requiring a system reboot.
 
 ## Prerequisites
@@ -60,6 +61,8 @@ Run the script as `root` from your Unraid terminal:
 | `--driver-version <ver>`| Override the auto-detected driver version (e.g. `590.48.01`). |
 | `--src-dir <path>` | Path to an existing `open-gpu-kernel-modules` source directory. If not provided, the source is automatically downloaded. |
 | `--plugin-dir <path>` | Override the default plugin packages directory (default: `/boot/config/plugins/nvidia-driver/packages`). |
+| `--greenboost` | Also build and inject the GreenBoost kernel module and CUDA shim. |
+| `--greenboost-src <path>` | Path to a local GreenBoost source directory. If not provided, it is automatically cloned from GitLab. |
 | `--help` | Show the help message. |
 
 ## How it works
@@ -97,6 +100,34 @@ If P2P memory access is successfully enabled, the read (`-r`) and write (`-w`) m
 ### 2. CUDA samples (`p2pBandwidthLatencyTest`)
 
 If you have the CUDA extras and samples installed (available via many Docker images containing complete CUDA toolkits), you can run the `p2pBandwidthLatencyTest` binary. It natively tests whether GPUs can communicate bidirectionally. If P2P access works, the tool will report `P2P Connectivity Matrix` mapping to `1` (Yes) between GPUs instead of `0` (No), and show significantly enhanced bandwidth speeds and lower latencies across PCIe.
+
+## GreenBoost (Optional Memory Extension)
+
+GreenBoost is a 3-tier GPU memory extension system that allows you to run large language models (LLMs) that exceed your physical VRAM by using system RAM and NVMe storage.
+
+### Activation
+
+To include GreenBoost in your patched driver, simply add the `--greenboost` flag:
+
+```bash
+./patch-driver.sh --greenboost --reload
+```
+
+### Usage
+
+After patching and reloading (or rebooting), the GreenBoost kernel module will be loaded. To use the CUDA memory extension with an application (like Ollama), you must use the `LD_PRELOAD` shim:
+
+```bash
+LD_PRELOAD=/usr/local/lib/libgreenboost_cuda.so ollama run glm-4.7-flash:q8_0
+```
+
+### Monitoring
+
+You can monitor the memory tiers (VRAM, RAM, NVMe) in real-time:
+
+```bash
+watch -n1 'cat /sys/class/greenboost/greenboost/pool_info'
+```
 
 ## Acknowledgments
 

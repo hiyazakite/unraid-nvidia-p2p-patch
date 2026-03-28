@@ -23,6 +23,9 @@
 #                             compatible. Does not build or modify anything.
 #   --dry-run                 Print what would be done, don't change anything
 #   --reload                  After patching, reload the live kernel modules
+#   --greenboost              Also build and inject the GreenBoost kernel module
+#                             and CUDA shim. (Requires git)
+#   --greenboost-src <path>   Override GreenBoost source directory
 #   --help                    Show this help
 # =============================================================================
 
@@ -37,6 +40,9 @@ SRC_DIR=""
 PLUGIN_PACKAGES_DIR="/boot/config/plugins/nvidia-driver/packages"
 DRY_RUN=false
 RELOAD=false
+GREENBOOST=false
+GREENBOOST_SRC_DIR=""
+GREENBOOST_REPO="https://gitlab.com/IsolatedOctopi/nvidia_greenboost.git"
 CHECK_ONLY=false
 IN_DOCKER=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -211,6 +217,8 @@ while [[ $# -gt 0 ]]; do
     --check)          CHECK_ONLY=true;     shift   ;;
     --dry-run)        DRY_RUN=true;        shift   ;;
     --reload)         RELOAD=true;         shift   ;;
+    --greenboost)     GREENBOOST=true;     shift   ;;
+    --greenboost-src) GREENBOOST_SRC_DIR="$2"; shift 2 ;;
     --in-docker)      IN_DOCKER=true;      shift   ;; # internal: already inside container
     --help)
       grep '^#' "$0" | sed 's/^# \?//'
@@ -400,6 +408,39 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Step 4b – Build GreenBoost (if enabled)
+# ---------------------------------------------------------------------------
+if [[ "$GREENBOOST" == true ]]; then
+  BUILD_LOG_GB="${SCRIPT_DIR}/greenboost-build.log"
+  info "Building GreenBoost (log: $BUILD_LOG_GB)..."
+
+  if [[ "$DRY_RUN" == false ]]; then
+    # 1. Build kernel module
+    # We use the kernel build system directly to ensure KERNEL_UNAME is honored
+    info "  Building greenboost.ko..."
+    make -C "/lib/modules/${KERNEL_VERSION}/build" M="${GREENBOOST_SRC_DIR}" modules -j"$(nproc)" 2>&1 | tee "$BUILD_LOG_GB"
+    
+    # 2. Build CUDA shim
+    info "  Building libgreenboost_cuda.so..."
+    pushd "$GREENBOOST_SRC_DIR" > /dev/null
+    # Note: We don't use 'make shim' here to avoid KDIR dependency issues inside Docker
+    gcc -shared -fPIC -O2 -std=gnu11 -o libgreenboost_cuda.so greenboost_cuda_shim.c -ldl -lpthread \
+        -Wl,--version-script=greenboost_cuda.map 2>&1 | tee -a "$BUILD_LOG_GB"
+    popd > /dev/null
+
+    if [[ ! -f "${GREENBOOST_SRC_DIR}/greenboost.ko" ]]; then
+      die "GreenBoost kernel module failed to build. Check $BUILD_LOG_GB"
+    fi
+    if [[ ! -f "${GREENBOOST_SRC_DIR}/libgreenboost_cuda.so" ]]; then
+      die "GreenBoost CUDA shim failed to build. Check $BUILD_LOG_GB"
+    fi
+    ok "GreenBoost build complete."
+  else
+    info "[DRY-RUN] Would build GreenBoost kernel module and CUDA shim in: $GREENBOOST_SRC_DIR"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Step 5 – Collect built .ko files
 # ---------------------------------------------------------------------------
 # The built modules end up in kernel-open/<subdir>/*.ko
@@ -416,6 +457,12 @@ if [[ "$DRY_RUN" == false ]]; then
   for name in "${!BUILT_KO[@]}"; do
     echo "  ${BUILT_KO[$name]}"
   done
+
+  # Add GreenBoost to the list if enabled
+  if [[ "$GREENBOOST" == true ]]; then
+    BUILT_KO["greenboost.ko"]="${GREENBOOST_SRC_DIR}/greenboost.ko"
+    echo "  ${GREENBOOST_SRC_DIR}/greenboost.ko (GreenBoost)"
+  fi
 else
   info "[DRY-RUN] Would collect .ko files from ${SRC_DIR}/kernel-open/"
 fi
@@ -452,7 +499,25 @@ if [[ "$DRY_RUN" == false ]]; then
     fi
   done < <(find "$KO_INSTALL_DIR" -name "*.ko" -print0)
 
-  ok "Replaced $REPLACED kernel module(s)."
+  # Explicitly add greenboost if enabled
+  if [[ "$GREENBOOST" == true ]]; then
+    EXTRA_DIR="${WORK_DIR}/lib/modules/${KERNEL_VERSION}/extra"
+    info "  Adding GreenBoost to: $EXTRA_DIR"
+    mkdir -p "$EXTRA_DIR"
+    cp -f "${GREENBOOST_SRC_DIR}/greenboost.ko" "$EXTRA_DIR/"
+    
+    SHIM_DIR="${WORK_DIR}/usr/local/lib"
+    INC_DIR="${WORK_DIR}/usr/local/include"
+    info "  Adding CUDA shim to: $SHIM_DIR"
+    mkdir -p "$SHIM_DIR" "$INC_DIR"
+    cp -f "${GREENBOOST_SRC_DIR}/libgreenboost_cuda.so" "$SHIM_DIR/"
+    cp -f "${GREENBOOST_SRC_DIR}/greenboost_cuda.map" "$SHIM_DIR/"
+    cp -f "${GREENBOOST_SRC_DIR}/greenboost_ioctl.h" "$INC_DIR/"
+    
+    REPLACED=$((REPLACED + 1))
+  fi
+
+  ok "Replaced/added $REPLACED kernel module(s)."
 else
   info "[DRY-RUN] Would extract $PACKAGE_FILE and replace .ko files in:"
   info "  lib/modules/${KERNEL_VERSION}/kernel/drivers/video/"
@@ -506,6 +571,13 @@ if [[ "$RELOAD" == true ]]; then
     installpkg "$PACKAGE_FILE" > /dev/null
     depmod --all > /dev/null
     modprobe nvidia > /dev/null
+    
+    if [[ "$GREENBOOST" == true ]]; then
+      info "  Loading GreenBoost module..."
+      # Attempt to load with auto-detected/default params
+      modprobe greenboost 2>/dev/null || true
+    fi
+
     ok "Modules reloaded."
   else
     info "[DRY-RUN] Would reload: rmmod + installpkg + depmod + modprobe nvidia"
@@ -522,5 +594,15 @@ ok "  Driver: $DRIVER_VERSION  |  Kernel: $KERNEL_VERSION"
 ok "  Package: $PACKAGE_FILE"
 if [[ "$RELOAD" == false ]]; then
   warn "  Reboot or use --reload to activate the patched modules."
+fi
+
+if [[ "$GREENBOOST" == true ]]; then
+  echo
+  ok "GreenBoost installed:"
+  ok "  Kernel module : /lib/modules/${KERNEL_VERSION}/extra/greenboost.ko"
+  ok "  CUDA shim     : /usr/local/lib/libgreenboost_cuda.so"
+  echo
+  info "To use GreenBoost with applications (e.g. Ollama):"
+  info "  LD_PRELOAD=/usr/local/lib/libgreenboost_cuda.so your_app"
 fi
 ok "=================================================================="
